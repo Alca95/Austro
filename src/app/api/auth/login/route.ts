@@ -109,6 +109,30 @@ export async function POST(request: Request) {
       password,
     });
 
+  if (signInError?.code === "email_not_confirmed") {
+    const normalizedEmail = email.trim().toLowerCase();
+
+    const { error: resendError } =
+      await supabase.auth.resend({
+        type: "signup",
+        email: normalizedEmail,
+      });
+
+    return jsonResponse(
+      {
+        success: false,
+        error: "EMAIL_NOT_CONFIRMED",
+        message: resendError
+          ? "Tu correo todavía no está verificado. Continúa con la verificación para acceder."
+          : "Tu correo todavía no está verificado. Te enviamos un nuevo código.",
+        verificationRequired: true,
+        verificationEmail: normalizedEmail,
+        redirectTo: "/verificar-correo",
+      },
+      403,
+    );
+  }
+
   if (signInError) {
     return invalidCredentialsResponse();
   }

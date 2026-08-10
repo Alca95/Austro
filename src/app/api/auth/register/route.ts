@@ -271,6 +271,7 @@ export async function POST(request: Request) {
       terms_accepted_at: acceptedAt,
       privacy_accepted_at: acceptedAt,
       last_profile_reviewed_at: acceptedAt,
+      onboarding_completed_at: acceptedAt,
     })
     .eq("id", userId);
 

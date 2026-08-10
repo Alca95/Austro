@@ -28,13 +28,17 @@ type AuthFormProps = {
 
 type ApiResponse = {
   success?: boolean;
+  error?: string;
   message?: string;
   redirectTo?: string;
+  verificationRequired?: boolean;
+  verificationEmail?: string;
 };
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const CI_PATTERN = /^\d{4,10}$/;
 const PHONE_PATTERN = /^\+?\d{8,15}$/;
+const EMAIL_STORAGE_KEY = "austro.pendingVerificationEmail";
 
 const inputClass =
   "min-h-12 w-full rounded-xl border border-border bg-surface px-4 text-sm text-foreground outline-none transition placeholder:text-text-secondary/70 focus:border-primary focus:ring-4 focus:ring-primary/10 disabled:cursor-not-allowed disabled:opacity-60";
@@ -314,6 +318,27 @@ export default function AuthForm({
 
       const result = await readApiResponse(response);
 
+      if (
+        !response.ok &&
+        result.error === "EMAIL_NOT_CONFIRMED" &&
+        result.verificationRequired === true &&
+        typeof result.verificationEmail === "string"
+      ) {
+        const verificationEmail = result.verificationEmail
+          .trim()
+          .toLowerCase();
+
+        if (EMAIL_PATTERN.test(verificationEmail)) {
+          sessionStorage.setItem(
+            EMAIL_STORAGE_KEY,
+            verificationEmail,
+          );
+
+          router.replace("/verificar-correo");
+          return;
+        }
+      }
+
       if (!response.ok) {
         setError(
           result.message ??
@@ -327,15 +352,11 @@ export default function AuthForm({
         router.refresh();
         return;
       }
+      const pendingEmail = email.trim().toLowerCase();
 
-      setSuccess(
-        result.message ??
-          "Cuenta creada. Revisa tu correo para confirmar el registro.",
-      );
-      setPassword("");
-      setConfirmPassword("");
-      setShowPassword(false);
-      setShowConfirmPassword(false);
+      sessionStorage.setItem(EMAIL_STORAGE_KEY, pendingEmail);
+
+      router.replace("/verificar-correo");
     } catch {
       setError(
         "No pudimos conectar con el servicio. Comprueba tu conexión e inténtalo nuevamente.",
