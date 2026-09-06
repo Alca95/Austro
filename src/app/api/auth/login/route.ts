@@ -103,11 +103,11 @@ export async function POST(request: Request) {
 
   const supabase = await createClient();
 
-  const { error: signInError } =
-    await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+const { data: signInData, error: signInError } =
+  await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
 
   if (signInError?.code === "email_not_confirmed") {
     const normalizedEmail = email.trim().toLowerCase();
@@ -137,10 +137,95 @@ export async function POST(request: Request) {
     return invalidCredentialsResponse();
   }
 
+const authenticatedUserId = signInData.user?.id;
+
+if (!authenticatedUserId) {
+  await supabase.auth.signOut();
+  return invalidCredentialsResponse();
+}
+
+const { data: roleRecord, error: roleError } =
+  await supabaseAdmin
+    .from("user_roles")
+    .select("role")
+    .eq("user_id", authenticatedUserId)
+    .maybeSingle();
+
+if (roleError) {
+  await supabase.auth.signOut();
+
+  console.error(
+    "[auth/login] No se pudo comprobar el rol:",
+    roleError.code,
+  );
+
+  return jsonResponse(
+    {
+      error: "AUTHORIZATION_CHECK_FAILED",
+      message:
+        "No pudimos comprobar los permisos de la cuenta. Inténtalo nuevamente.",
+    },
+    500,
+  );
+}
+
+  const staffRoles = new Set([
+    "support",
+    "moderator",
+    "admin",
+    "superadmin",
+  ]);
+
+  const isStaff =
+    typeof roleRecord?.role === "string" &&
+    staffRoles.has(roleRecord.role);
+
+  if (!isStaff) {
+    return jsonResponse(
+      {
+        success: true,
+        redirectTo: "/publicar",
+      },
+      200,
+    );
+  }
+
+  const {
+    data: assuranceData,
+    error: assuranceError,
+  } =
+    await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+
+  if (assuranceError) {
+    await supabase.auth.signOut();
+
+    return jsonResponse(
+      {
+        error: "MFA_CHECK_FAILED",
+        message:
+          "No pudimos comprobar la seguridad de la cuenta. Inténtalo nuevamente.",
+      },
+      500,
+    );
+  }
+
+  let redirectTo: string;
+
+  if (
+    assuranceData.currentLevel === "aal2" &&
+    assuranceData.nextLevel === "aal2"
+  ) {
+    redirectTo = "/admin";
+  } else if (assuranceData.nextLevel === "aal2") {
+    redirectTo = "/verificar-mfa";
+  } else {
+    redirectTo = "/configurar-mfa";
+  }
+
   return jsonResponse(
     {
       success: true,
-      redirectTo: "/publicar",
+      redirectTo,
     },
     200,
   );

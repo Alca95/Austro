@@ -348,8 +348,7 @@ export default function AuthForm({
       }
 
       if (mode === "login") {
-        router.replace(result.redirectTo ?? "/publicar");
-        router.refresh();
+        window.location.assign(result.redirectTo ?? "/publicar");
         return;
       }
       const pendingEmail = email.trim().toLowerCase();

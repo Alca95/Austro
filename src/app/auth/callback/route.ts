@@ -1,11 +1,19 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { supabaseAdmin } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 const ALLOWED_REDIRECTS = new Set([
   "/publicar",
   "/completar-perfil",
   "/actualizar-contrasena",
+]);
+
+const STAFF_ROLES = new Set([
+  "support",
+  "moderator",
+  "admin",
+  "superadmin",
 ]);
 
 function getSafeRedirect(value: string | null): string {
@@ -41,6 +49,7 @@ function createRedirect(
 
 export async function GET(request: NextRequest) {
   const code = request.nextUrl.searchParams.get("code");
+
   const requestedPath = getSafeRedirect(
     request.nextUrl.searchParams.get("next"),
   );
@@ -60,7 +69,9 @@ export async function GET(request: NextRequest) {
     error: sessionError,
   } = await supabase.auth.exchangeCodeForSession(code);
 
-  if (sessionError || !sessionData.user) {
+  const authenticatedUserId = sessionData.user?.id;
+
+  if (sessionError || !authenticatedUserId) {
     return createRedirect(
       request,
       "/iniciar-sesion",
@@ -68,16 +79,85 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // La recuperación de contraseña no depende del estado del perfil.
+  // La recuperación de contraseña conserva su flujo propio.
   if (requestedPath === "/actualizar-contrasena") {
     return createRedirect(request, requestedPath);
   }
 
-  const { data: profile, error: profileError } = await supabase
-    .from("profiles")
-    .select("onboarding_completed_at")
-    .eq("id", sessionData.user.id)
-    .maybeSingle();
+  const { data: roleRecord, error: roleError } =
+    await supabaseAdmin
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", authenticatedUserId)
+      .maybeSingle();
+
+  if (roleError) {
+    console.error(
+      "[auth/callback] No se pudo comprobar el rol:",
+      roleError.code,
+    );
+
+    await supabase.auth.signOut();
+
+    return createRedirect(
+      request,
+      "/iniciar-sesion",
+      "permisos",
+    );
+  }
+
+  const isStaff =
+    typeof roleRecord?.role === "string" &&
+    STAFF_ROLES.has(roleRecord.role);
+
+  if (isStaff) {
+    const {
+      data: assuranceData,
+      error: assuranceError,
+    } =
+      await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+
+    if (assuranceError) {
+      console.error(
+        "[auth/callback] No se pudo comprobar MFA:",
+        assuranceError.message,
+      );
+
+      await supabase.auth.signOut();
+
+      return createRedirect(
+        request,
+        "/iniciar-sesion",
+        "mfa",
+      );
+    }
+
+    if (
+      assuranceData.currentLevel === "aal2" &&
+      assuranceData.nextLevel === "aal2"
+    ) {
+      return createRedirect(request, "/admin");
+    }
+
+    if (assuranceData.nextLevel === "aal2") {
+      return createRedirect(
+        request,
+        "/verificar-mfa",
+      );
+    }
+
+    return createRedirect(
+      request,
+      "/configurar-mfa",
+    );
+  }
+
+  const { data: profile, error: profileError } =
+    await supabase
+      .from("profiles")
+      .select("onboarding_completed_at")
+      .eq("id", authenticatedUserId)
+      .maybeSingle();
 
   if (profileError) {
     console.error(
