@@ -1,0 +1,3 @@
+alter type public.listing_status
+add value if not exists 'suspended'
+after 'published';
