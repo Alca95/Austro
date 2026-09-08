@@ -27,7 +27,17 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { categoryOptions, ListingType } from "../data/austroListings";
+import type { ListingType } from "../data/austroListings";
+
+type PublicationCategory = {
+  id: string;
+  name: string;
+  allowed_types: ListingType[];
+};
+
+type PublishWizardProps = {
+  categories: PublicationCategory[];
+};
 
 type DocumentType = "" | "ruc" | "ci";
 
@@ -481,9 +491,18 @@ function ToggleCard({
   );
 }
 
-export default function PublishWizard() {
+export default function PublishWizard({
+  categories,
+}: PublishWizardProps) {
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState<FormData>(initialFormData);
+    const availableCategories = useMemo(
+    () =>
+      categories.filter((category) =>
+        category.allowed_types.includes(formData.type),
+      ),
+    [categories, formData.type],
+  );
   const [errors, setErrors] = useState<FieldErrors>({});
   const [submitted, setSubmitted] = useState(false);
   const [locating, setLocating] = useState(false);
@@ -534,6 +553,13 @@ export default function PublishWizard() {
     setFormData((current) => ({
       ...current,
       type,
+      category: categories.some(
+        (category) =>
+          category.id === current.category &&
+          category.allowed_types.includes(type),
+      )
+        ? current.category
+        : "",
       documentType: type === "comercio" ? current.documentType : "",
       documentNumber: type === "comercio" ? current.documentNumber : "",
       documentVerifier: type === "comercio" ? current.documentVerifier : "",
@@ -690,8 +716,12 @@ export default function PublishWizard() {
               : "Ingresa el nombre del comercio.";
       }
 
-      if (!formData.category) {
-        nextErrors.category = "Selecciona una categoría.";
+      if (
+        !availableCategories.some(
+          (category) => category.id === formData.category,
+        )
+      ) {
+        nextErrors.category = "Selecciona una categoría válida.";
       }
 
       if (formData.description.trim().length < 30) {
@@ -1136,9 +1166,9 @@ export default function PublishWizard() {
                         className={`${inputClass} appearance-none pr-10`}
                       >
                         <option value="">Seleccionar categoría</option>
-                        {categoryOptions.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
+                        {availableCategories.map((category) => (
+                          <option key={category.id} value={category.id}>
+                            {category.name}
                           </option>
                         ))}
                       </select>
@@ -2394,9 +2424,9 @@ export default function PublishWizard() {
                     <ReviewItem
                       label="Categoría"
                       value={
-                        categoryOptions.find(
-                          (option) => option.value === formData.category,
-                        )?.label
+                        categories.find(
+                          (category) => category.id === formData.category,
+                        )?.name
                       }
                     />
                     <ReviewItem
