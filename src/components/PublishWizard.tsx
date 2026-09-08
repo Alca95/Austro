@@ -365,6 +365,29 @@ function normalizeDigits(value: string, maxLength = 10) {
   return value.replace(/\D/g, "").slice(0, maxLength);
 }
 
+function normalizeParaguayWhatsapp(value: string): string | null {
+  const trimmedValue = value.trim();
+
+  if (!trimmedValue || !/^\+?[0-9()\s.-]+$/.test(trimmedValue)) {
+    return null;
+  }
+
+  const digits = trimmedValue.replace(/\D/g, "");
+  let nationalNumber = digits;
+
+  if (digits.startsWith("595") && digits.length === 12) {
+    nationalNumber = digits.slice(3);
+  } else if (digits.length === 10 && digits.startsWith("0")) {
+    nationalNumber = digits.slice(1);
+  }
+
+  if (!/^9\d{8}$/.test(nationalNumber)) {
+    return null;
+  }
+
+  return `+595${nationalNumber}`;
+}
+
 function yesNoLabel(value: boolean) {
   return value ? "Sí" : "No";
 }
@@ -503,11 +526,13 @@ export default function PublishWizard({
       ),
     [categories, formData.type],
   );
+
   const [errors, setErrors] = useState<FieldErrors>({});
   const [submitted, setSubmitted] = useState(false);
   const [locating, setLocating] = useState(false);
   const [locationMessage, setLocationMessage] = useState("");
   const [imagePreview, setImagePreview] = useState("");
+    const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [draftMessage, setDraftMessage] = useState("");
   const [helpOpen, setHelpOpen] = useState(false);
   const [helpInput, setHelpInput] = useState("");
@@ -744,7 +769,7 @@ export default function PublishWizard({
         }
       }
 
-      if (!formData.imageName) {
+      if (formData.type !== "servicio" && !selectedImage) {
         nextErrors.imageName = "Agrega una imagen principal.";
       }
     }
@@ -761,8 +786,9 @@ export default function PublishWizard({
       if (formData.type === "servicio" && !formData.serviceArea.trim()) {
         nextErrors.serviceArea = "Indica el área donde prestas el servicio.";
       }
-      if (!formData.whatsapp.trim()) {
-        nextErrors.whatsapp = "Ingresa un número de celular o WhatsApp.";
+      if (!normalizeParaguayWhatsapp(formData.whatsapp)) {
+        nextErrors.whatsapp =
+          "Ingresa un número paraguayo válido. Ej.: 0981 123 456.";
       }
       if (formData.email && !/^\S+@\S+\.\S+$/.test(formData.email)) {
         nextErrors.email = "Ingresa un correo válido.";
@@ -845,6 +871,14 @@ export default function PublishWizard({
 
   function goForward() {
     if (!validateStep(step)) return;
+
+    if (step === 2) {
+      const normalizedWhatsapp = normalizeParaguayWhatsapp(formData.whatsapp);
+      if (normalizedWhatsapp) {
+        updateField("whatsapp", normalizedWhatsapp);
+      }
+    }
+
     setStep((current) => Math.min(current + 1, 4));
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -859,7 +893,12 @@ export default function PublishWizard({
     const file = event.target.files?.[0];
     if (!file) return;
 
-    const acceptedTypes = ["image/jpeg", "image/png", "image/webp"];
+    const acceptedTypes = [
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+    ];
+
     if (!acceptedTypes.includes(file.type)) {
       setErrors((current) => ({
         ...current,
@@ -869,18 +908,33 @@ export default function PublishWizard({
       return;
     }
 
-    if (file.size > 5 * 1024 * 1024) {
+    if (file.size === 0 || file.size > 5 * 1024 * 1024) {
       setErrors((current) => ({
         ...current,
-        imageName: "La imagen no debe superar 5 MB.",
+        imageName:
+          "La imagen debe tener contenido y no superar 5 MB.",
       }));
       event.target.value = "";
       return;
     }
 
-    updateField("imageName", file.name);
     const reader = new FileReader();
-    reader.onload = () => setImagePreview(String(reader.result ?? ""));
+
+    reader.onload = () => {
+      if (typeof reader.result !== "string") return;
+
+      setSelectedImage(file);
+      updateField("imageName", file.name);
+      setImagePreview(reader.result);
+    };
+
+    reader.onerror = () => {
+      setErrors((current) => ({
+        ...current,
+        imageName: "No pudimos leer la imagen. Intenta nuevamente.",
+      }));
+    };
+
     reader.readAsDataURL(file);
   }
 
@@ -949,6 +1003,8 @@ export default function PublishWizard({
                 setFormData(initialFormData);
                 setStep(1);
                 setSubmitted(false);
+                setSelectedImage(null);
+                setImagePreview("");
                 setLocationMessage("");
                 setImagePreview("");
                 setDraftMessage("");
@@ -1331,7 +1387,7 @@ export default function PublishWizard({
                     htmlFor="publication-image"
                     className="text-sm font-semibold text-foreground"
                   >
-                    Imagen principal *
+                    Imagen principal {formData.type === "servicio" ? "(opcional)" : "*"}
                   </label>
                   <label
                     htmlFor="publication-image"
@@ -1357,6 +1413,15 @@ export default function PublishWizard({
                     className="sr-only"
                   />
                   <FieldError message={errors.imageName} />
+                  {imagePreview && (
+                    <div className="mt-4 overflow-hidden rounded-2xl border border-border bg-surface-soft">
+                      <img
+                        src={imagePreview}
+                        alt="Vista previa de la imagen seleccionada"
+                        className="max-h-64 w-full object-contain"
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -2405,7 +2470,10 @@ export default function PublishWizard({
                         }
                       />
                     )}
-                    <ReviewItem label="Imagen" value={formData.imageName} />
+                    <ReviewItem
+                      label="Imagen"
+                      value={formData.imageName || "No agregada"}
+                    />
                   </ReviewSection>
 
                   <ReviewSection title="Ubicación">
