@@ -560,9 +560,9 @@ export default function PublishWizard({
       )
         ? current.category
         : "",
-      documentType: type === "comercio" ? current.documentType : "",
-      documentNumber: type === "comercio" ? current.documentNumber : "",
-      documentVerifier: type === "comercio" ? current.documentVerifier : "",
+      documentType: type !== "evento" ? current.documentType : "",
+      documentNumber: type !== "evento" ? current.documentNumber : "",
+      documentVerifier: type !== "evento" ? current.documentVerifier : "",
     }));
     setErrors({});
   }
@@ -729,22 +729,16 @@ export default function PublishWizard({
           "Describe la propuesta con al menos 30 caracteres.";
       }
 
-      if (formData.type === "comercio") {
-        if (!formData.documentType) {
-          nextErrors.documentType = "Selecciona RUC o número de cédula.";
-        }
-
-        if (!formData.documentNumber.trim()) {
+      if (
+        formData.type !== "evento" &&
+        formData.documentType === "ruc"
+      ) {
+        if (!/^[0-9]{4,10}$/.test(formData.documentNumber)) {
           nextErrors.documentNumber =
-            formData.documentType === "ruc"
-              ? "Ingresa el número base del RUC."
-              : "Ingresa el número de cédula.";
+            "El RUC debe contener entre 4 y 10 dígitos.";
         }
 
-        if (
-          formData.documentType === "ruc" &&
-          !formData.documentVerifier.trim()
-        ) {
+        if (!/^[0-9]$/.test(formData.documentVerifier)) {
           nextErrors.documentVerifier =
             "Ingresa el dígito verificador del RUC.";
         }
@@ -1206,93 +1200,60 @@ export default function PublishWizard({
                   <FieldError message={errors.description} />
                 </div>
 
-                {formData.type === "comercio" && (
-                  <div className="mt-5 rounded-2xl border border-emerald-100 bg-emerald-50/50 p-4 sm:p-5">
-                    <div>
-                      <h3 className="text-sm font-bold text-foreground">
-                        Identificación del comercio
-                      </h3>
-                      <p className="mt-1 text-xs leading-5 text-text-secondary">
-                        Esta información será privada y se utilizará únicamente
-                        para verificar al responsable de la publicación.
-                      </p>
-                    </div>
+                {formData.type !== "evento" && (
+                  <div className="mt-5 rounded-2xl border border-border bg-surface-soft p-4 sm:p-5">
+                    <h3 className="text-sm font-bold text-foreground">
+                      Datos fiscales opcionales
+                    </h3>
 
-                    <div className="mt-4 grid gap-5 sm:grid-cols-2">
-                      <div>
-                        <label
-                          htmlFor="publication-document-type"
-                          className="text-sm font-semibold text-foreground"
-                        >
-                          Tipo de identificación *
-                        </label>
+                    <p className="mt-1 text-xs leading-5 text-text-secondary">
+                      Puedes publicar sin RUC. Si lo agregas, quedará
+                      pendiente de comprobación y su número no se mostrará
+                      públicamente.
+                    </p>
 
-                        <div className="relative">
-                          <select
-                            id="publication-document-type"
-                            value={formData.documentType}
-                            onChange={(event) =>
-                              changeDocumentType(
-                                event.target.value as DocumentType,
-                              )
-                            }
-                            className={`${inputClass} appearance-none pr-10`}
-                          >
-                            <option value="">Seleccionar</option>
-                            <option value="ruc">RUC</option>
-                            <option value="ci">Número de cédula</option>
-                          </select>
-
-                          <ChevronDown
-                            aria-hidden="true"
-                            className="pointer-events-none absolute right-3 top-[26px] h-4 w-4 text-text-secondary"
-                          />
-                        </div>
-
-                        <FieldError message={errors.documentType} />
-                      </div>
-
-                      <div
-                        className={
-                          formData.documentType === "ruc"
-                            ? "grid grid-cols-[minmax(0,1fr)_88px] gap-3"
-                            : undefined
+                    <label className="mt-4 flex cursor-pointer items-center gap-3 text-sm font-medium text-foreground">
+                      <input
+                        type="checkbox"
+                        checked={formData.documentType === "ruc"}
+                        onChange={(event) =>
+                          changeDocumentType(
+                            event.target.checked ? "ruc" : "",
+                          )
                         }
-                      >
-                        <div>
-                          <label
-                            htmlFor="publication-document-number"
-                            className="text-sm font-semibold text-foreground"
-                          >
-                            {formData.documentType === "ruc"
-                              ? "Número de RUC"
-                              : formData.documentType === "ci"
-                                ? "Número de cédula"
-                                : "Número de identificación"}{" "}
-                            *
-                          </label>
+                        className="h-4 w-4 accent-primary"
+                      />
+                      Quiero agregar mi RUC
+                    </label>
 
-                          <input
-                            id="publication-document-number"
-                            type="text"
-                            inputMode="numeric"
-                            autoComplete="off"
-                            value={formData.documentNumber}
-                            onChange={(event) =>
-                              changeDocumentNumber(event.target.value)
-                            }
-                            placeholder={
-                              formData.documentType === "ruc"
-                                ? "Ej.: 80012345"
-                                : "Ej.: 4123456"
-                            }
-                            className={inputClass}
-                          />
+                    {formData.documentType === "ruc" && (
+                      <>
+                        <div className="mt-4 grid grid-cols-[minmax(0,1fr)_88px] gap-3">
+                          <div>
+                            <label
+                              htmlFor="publication-document-number"
+                              className="text-sm font-semibold text-foreground"
+                            >
+                              Número de RUC *
+                            </label>
 
-                          <FieldError message={errors.documentNumber} />
-                        </div>
+                            <input
+                              id="publication-document-number"
+                              type="text"
+                              inputMode="numeric"
+                              autoComplete="off"
+                              value={formData.documentNumber}
+                              onChange={(event) =>
+                                changeDocumentNumber(event.target.value)
+                              }
+                              placeholder="Ej.: 80012345"
+                              aria-invalid={Boolean(errors.documentNumber)}
+                              className={inputClass}
+                            />
 
-                        {formData.documentType === "ruc" && (
+                            <FieldError message={errors.documentNumber} />
+                          </div>
+
                           <div>
                             <label
                               htmlFor="publication-document-verifier"
@@ -1300,6 +1261,7 @@ export default function PublishWizard({
                             >
                               DV *
                             </label>
+
                             <input
                               id="publication-document-verifier"
                               type="text"
@@ -1315,20 +1277,20 @@ export default function PublishWizard({
                               }
                               placeholder="6"
                               aria-label="Dígito verificador del RUC"
+                              aria-invalid={Boolean(errors.documentVerifier)}
                               className={`${inputClass} text-center`}
                             />
+
                             <FieldError message={errors.documentVerifier} />
                           </div>
-                        )}
-                      </div>
+                        </div>
 
-                      {formData.documentType && (
-                        <p className="text-xs leading-5 text-text-secondary sm:col-span-2">
-                          Ingresa solo números. Austro elimina automáticamente
-                          puntos, espacios y guiones.
+                        <p className="mt-3 text-xs leading-5 text-text-secondary">
+                          Puedes pegar el RUC completo con guion: separaremos
+                          el número y el dígito verificador.
                         </p>
-                      )}
-                    </div>
+                      </>
+                    )}
                   </div>
                 )}
 
@@ -2433,13 +2395,13 @@ export default function PublishWizard({
                       label="Información adicional"
                       value={formData.additionalInfo}
                     />
-                    {formData.type === "comercio" && (
+                    {formData.type !== "evento" && (
                       <ReviewItem
-                        label="Identificación privada"
+                        label="RUC — dato privado"
                         value={
                           formData.documentType === "ruc"
-                            ? `RUC ${formData.documentNumber}-${formData.documentVerifier}`
-                            : `CI ${formData.documentNumber}`
+                            ? `${formData.documentNumber}-${formData.documentVerifier} · Se enviará para comprobación`
+                            : "No agregado"
                         }
                       />
                     )}
