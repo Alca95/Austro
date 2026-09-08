@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import type { ListingType } from "../data/austroListings";
+import { createClient } from "../lib/supabase/client";
 
 type PublicationCategory = {
   id: string;
@@ -140,6 +141,7 @@ type HelpMessage = {
 };
 
 type FieldErrors = Partial<Record<keyof FormData, string>>;
+type PublicationStatus = "published" | "pending";
 
 const publicationTypes: Array<{
   value: ListingType;
@@ -388,6 +390,58 @@ function normalizeParaguayWhatsapp(value: string): string | null {
   return `+595${nationalNumber}`;
 }
 
+function normalizeAdditionalContact(value: string): string | null {
+  const trimmedValue = value.trim();
+
+  if (!trimmedValue || !/^\+?[0-9()\s.-]+$/.test(trimmedValue)) {
+    return null;
+  }
+
+  const normalizedValue = trimmedValue.replace(/[()\s.-]/g, "");
+  return /^\+?[0-9]{6,15}$/.test(normalizedValue)
+    ? normalizedValue
+    : null;
+}
+
+function isHttpsUrl(value: string) {
+  return !value.trim() || /^https:\/\/\S+$/i.test(value.trim());
+}
+
+function parsePositivePyg(value: string): number | "" | null {
+  const trimmedValue = value.trim();
+  if (!trimmedValue) return "";
+
+  if (!/^\d+(?:\.\d{3})*$/.test(trimmedValue)) return null;
+
+  const amount = Number(trimmedValue.replace(/\./g, ""));
+  return Number.isSafeInteger(amount) && amount > 0 ? amount : null;
+}
+
+function toIsoDateTime(value: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+}
+
+function getRpcScalar(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (Array.isArray(value) && value.length === 1) {
+    return getRpcScalar(value[0]);
+  }
+  return null;
+}
+
+function isSessionAuthError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: string; message?: string; name?: string };
+  return (
+    candidate.code === "401" ||
+    /auth session missing|invalid jwt|jwt expired|session expired|not authenticated/i.test(
+      `${candidate.name ?? ""} ${candidate.message ?? ""}`,
+    )
+  );
+}
+
 function yesNoLabel(value: boolean) {
   return value ? "Sí" : "No";
 }
@@ -517,6 +571,7 @@ function ToggleCard({
 export default function PublishWizard({
   categories,
 }: PublishWizardProps) {
+  const [supabase] = useState(() => createClient());
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState<FormData>(initialFormData);
     const availableCategories = useMemo(
@@ -528,12 +583,21 @@ export default function PublishWizard({
   );
 
   const [errors, setErrors] = useState<FieldErrors>({});
-  const [submitted, setSubmitted] = useState(false);
   const [locating, setLocating] = useState(false);
   const [locationMessage, setLocationMessage] = useState("");
   const [imagePreview, setImagePreview] = useState("");
     const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [draftMessage, setDraftMessage] = useState("");
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [registeredImagePath, setRegisteredImagePath] = useState<string | null>(
+    null,
+  );
+  const [imageAttemptPath, setImageAttemptPath] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+  const [taxVerificationWarning, setTaxVerificationWarning] = useState("");
+  const [publicationStatus, setPublicationStatus] =
+    useState<PublicationStatus | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [helpInput, setHelpInput] = useState("");
   const [helpMessages, setHelpMessages] =
@@ -569,12 +633,399 @@ export default function PublishWizard({
 
   function updateField<K extends keyof FormData>(field: K, value: FormData[K]) {
     setFormData((current) => ({ ...current, [field]: value }));
+    setDraftMessage("");
     if (errors[field]) {
       setErrors((current) => ({ ...current, [field]: undefined }));
     }
   }
 
+  function buildDraftPayload(normalizedWhatsapp: string) {
+    const priceFrom = parsePositivePyg(formData.priceFrom);
+    const ticketPrice = parsePositivePyg(formData.ticketPrice);
+
+    return {
+      type: formData.type,
+      category_id: formData.category,
+      name: formData.name,
+      description: formData.description,
+      additional_info: formData.additionalInfo,
+      neighborhood: formData.neighborhood,
+      address: formData.address,
+      location_reference: formData.locationReference,
+      service_area: formData.serviceArea,
+      latitude: formData.latitude,
+      longitude: formData.longitude,
+      email: formData.email,
+      website: formData.website,
+      invoice_status: formData.invoiceStatus,
+      after_hours_messages: formData.afterHoursMessages,
+      commerce: {
+        delivery: formData.delivery,
+        pickup: formData.pickup,
+        reservations: formData.reservations,
+        parking: formData.parking,
+        accessibility: formData.accessibility,
+      },
+      service: {
+        at_home: formData.serviceAtHome,
+        fixed_location: formData.serviceFixedLocation,
+        remote: formData.serviceRemote,
+        requires_appointment: formData.requiresAppointment,
+        offers_quote: formData.offersQuote,
+        urgent_service: formData.urgentService,
+        availability_notes: formData.availabilityNotes,
+        price_from: priceFrom === null ? "" : priceFrom,
+      },
+      event: {
+        starts_at: toIsoDateTime(formData.eventStart),
+        ends_at: toIsoDateTime(formData.eventEnd),
+        pricing: formData.eventPricing,
+        ticket_price:
+          formData.eventPricing === "paid" && ticketPrice !== null
+            ? ticketPrice
+            : "",
+        ticket_url: formData.ticketUrl,
+        limited_capacity: formData.limitedCapacity,
+        recommended_audience: formData.recommendedAudience,
+        age_restriction: formData.ageRestriction,
+        parking: formData.parking,
+        accessibility: formData.accessibility,
+      },
+      contacts: [
+        {
+          type: "whatsapp",
+          value: normalizedWhatsapp,
+          label: "WhatsApp principal",
+          is_primary: true,
+          display_order: 0,
+        },
+        ...formData.additionalContacts
+          .map((contact) => normalizeAdditionalContact(contact))
+          .filter((contact): contact is string => Boolean(contact))
+          .map((contact, index) => ({
+            type: "phone",
+            value: contact,
+            label: null,
+            is_primary: false,
+            display_order: index + 1,
+          })),
+      ],
+      business_hours:
+        formData.type === "comercio"
+          ? formData.businessHours.map((schedule, index) => ({
+              day_of_week: index + 1,
+              is_open: schedule.isOpen,
+              is_24_hours: schedule.is24Hours,
+              open_time: schedule.openTime,
+              close_time: schedule.closeTime,
+            }))
+          : [],
+      payment_methods: formData.paymentMethods,
+      social_links: formData.socialLinks
+        .filter((link) => link.network && link.url.trim())
+        .map((link, index) => ({
+          network: link.network === "otro" ? "other" : link.network,
+          url: link.url.trim(),
+          display_order: index,
+        })),
+    };
+  }
+
+  function getPersistenceError(error: unknown) {
+    if (error instanceof Error) {
+      if (error.message === "status-check-failed") {
+        return "No pudimos comprobar el estado de la publicación. Inténtalo nuevamente.";
+      }
+      if (error.message === "not-editable") {
+        return "La publicación ya no se puede editar.";
+      }
+      if (error.message === "existing-primary-image") {
+        return "Esta publicación ya tiene una imagen principal registrada. No se reemplazará.";
+      }
+      if (error.message === "image-reconcile-failed") {
+        return "No pudimos confirmar el estado de la imagen. Inténtalo nuevamente.";
+      }
+    }
+
+    return isSessionAuthError(error)
+      ? "Tu sesión expiró. Vuelve a iniciar sesión para continuar."
+      : "No pudimos guardar la publicación. Revisa tus datos e inténtalo nuevamente.";
+  }
+
+  function getSubmissionError(error: unknown) {
+    if (error instanceof Error && error.message === "publication-uncertain") {
+      return "No pudimos confirmar el resultado. Comprueba el estado antes de reintentar.";
+    }
+
+    return isSessionAuthError(error)
+      ? "Tu sesión expiró. Vuelve a iniciar sesión para continuar."
+      : "No pudimos completar la publicación. Comprueba el estado antes de reintentar.";
+  }
+
+  function isCommunicationError(error: unknown) {
+    if (!error || typeof error !== "object") return false;
+    const candidate = error as { code?: string; message?: string; name?: string };
+    return (
+      !candidate.code &&
+      /network|fetch|timeout|timed out|aborted|connection|communication/i.test(
+        `${candidate.name ?? ""} ${candidate.message ?? ""}`,
+      )
+    );
+  }
+
+  async function readDraftState(listingId: string) {
+    const { data, error } = await supabase
+      .from("listings")
+      .select("id, status, slug")
+      .eq("id", listingId)
+      .maybeSingle();
+
+    if (error || !data || typeof data.id !== "string" || !data.id.trim()) {
+      throw new Error("status-check-failed");
+    }
+
+    return {
+      id: data.id,
+      status: data.status as string,
+      slug: data.slug as string | null,
+    };
+  }
+
+  async function ensureDraftWritable() {
+    if (!draftId) return null;
+
+    const currentListing = await readDraftState(draftId);
+    if (!currentListing) return null;
+
+    if (
+      currentListing.status === "published" ||
+      currentListing.status === "pending"
+    ) {
+      setPublicationStatus(currentListing.status);
+      return currentListing.status as PublicationStatus;
+    }
+
+    if (
+      currentListing.status !== "draft" &&
+      currentListing.status !== "rejected"
+    ) {
+      throw new Error("not-editable");
+    }
+
+    return currentListing.status;
+  }
+
+  async function submitTaxVerification(listingId: string) {
+    if (
+      formData.type === "evento" ||
+      formData.documentType !== "ruc"
+    ) {
+      return false;
+    }
+
+    try {
+      const taxResult = await supabase.rpc("submit_tax_verification", {
+        target_listing_id: listingId,
+        target_ruc_number: formData.documentNumber,
+        target_verification_digit: formData.documentVerifier,
+      });
+
+      if (taxResult.error || !getRpcScalar(taxResult.data)) {
+        return true;
+      }
+    } catch {
+      return true;
+    }
+
+    return false;
+  }
+
+  function validateAllSteps() {
+    for (const currentStep of [1, 2, 3]) {
+      if (!validateStep(currentStep)) {
+        setStep(currentStep);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  async function persistDraft() {
+    const normalizedWhatsapp = normalizeParaguayWhatsapp(formData.whatsapp);
+    if (!normalizedWhatsapp) {
+      throw new Error("invalid-whatsapp");
+    }
+
+    let registeredPath = registeredImagePath;
+    let pendingPath = imageAttemptPath;
+
+    const { data, error } = await supabase.rpc("save_listing_draft", {
+      target_listing_id: draftId,
+      draft_payload: buildDraftPayload(normalizedWhatsapp),
+    });
+
+    if (error) throw error;
+
+    const listingId = getRpcScalar(data);
+    if (!listingId) throw new Error("invalid-listing-id");
+
+    setDraftId(listingId);
+
+    if (pendingPath) {
+      const attemptResult = await supabase
+        .from("listing_images")
+        .select("storage_path")
+        .eq("listing_id", listingId)
+        .eq("storage_path", pendingPath)
+        .maybeSingle();
+
+      if (attemptResult.error) throw new Error("image-reconcile-failed");
+
+      if (attemptResult.data?.storage_path) {
+        registeredPath = attemptResult.data.storage_path;
+        setRegisteredImagePath(registeredPath);
+        pendingPath = null;
+        setImageAttemptPath(null);
+      } else {
+        const cleanupResult = await supabase.storage
+          .from("listing-images")
+          .remove([pendingPath]);
+        if (cleanupResult.error) throw new Error("image-reconcile-failed");
+        pendingPath = null;
+        setImageAttemptPath(null);
+      }
+    }
+
+    if (selectedImage && registeredPath) {
+      return listingId;
+    }
+
+    if (selectedImage && pendingPath) {
+      throw new Error("image-reconcile-failed");
+    }
+
+    if (selectedImage) {
+      const existingImageResult = await supabase
+        .from("listing_images")
+        .select("storage_path")
+        .eq("listing_id", listingId)
+        .eq("is_primary", true)
+        .maybeSingle();
+
+      if (existingImageResult.error) throw existingImageResult.error;
+
+      if (existingImageResult.data?.storage_path) {
+        throw new Error("existing-primary-image");
+      }
+
+      const extensionByMime: Record<string, string> = {
+        "image/jpeg": "jpg",
+        "image/png": "png",
+        "image/webp": "webp",
+      };
+      const extension = extensionByMime[selectedImage.type];
+      if (!extension) throw new Error("invalid-image-type");
+
+      const storagePath = `${listingId}/${crypto.randomUUID()}.${extension}`;
+      pendingPath = storagePath;
+      setImageAttemptPath(pendingPath);
+      const uploadResult = await supabase.storage
+        .from("listing-images")
+        .upload(storagePath, selectedImage, {
+          upsert: false,
+          contentType: selectedImage.type,
+        });
+
+      if (uploadResult.error || !uploadResult.data?.path) {
+        throw uploadResult.error ?? new Error("image-upload-failed");
+      }
+
+      const imageResult = await supabase.from("listing_images").insert({
+        listing_id: listingId,
+        storage_path: storagePath,
+        alt_text: formData.name,
+        is_primary: true,
+        display_order: 0,
+      });
+
+      if (imageResult.error) {
+        const reconcileResult = await supabase
+          .from("listing_images")
+          .select("storage_path")
+          .eq("listing_id", listingId)
+          .eq("storage_path", storagePath)
+          .maybeSingle();
+
+        if (reconcileResult.error) {
+          throw new Error("image-reconcile-failed");
+        }
+
+        if (reconcileResult.data?.storage_path) {
+          registeredPath = reconcileResult.data.storage_path;
+          setRegisteredImagePath(registeredPath);
+          pendingPath = null;
+          setImageAttemptPath(null);
+          return listingId;
+        }
+
+        const cleanupResult = await supabase.storage
+          .from("listing-images")
+          .remove([storagePath]);
+        if (cleanupResult.error) {
+          throw new Error("image-reconcile-failed");
+        }
+
+        pendingPath = null;
+        setImageAttemptPath(null);
+        throw imageResult.error;
+      }
+
+      registeredPath = storagePath;
+      setRegisteredImagePath(registeredPath);
+      pendingPath = null;
+      setImageAttemptPath(null);
+    }
+
+    if (selectedImage && !registeredPath) {
+      throw new Error("image-reconcile-failed");
+    }
+
+    return listingId;
+  }
+
+  async function handleSaveDraft() {
+    setDraftMessage("");
+    if (isSubmitting || !validateAllSteps()) return;
+
+    setIsSubmitting(true);
+    setSubmitError("");
+    setTaxVerificationWarning("");
+
+    try {
+      const existingStatus = await ensureDraftWritable();
+      if (existingStatus === "published" || existingStatus === "pending") {
+        return;
+      }
+
+      const listingId = await persistDraft();
+      if (await submitTaxVerification(listingId)) {
+        setTaxVerificationWarning(
+          "Los datos de la publicación se guardaron, pero el RUC no pudo enviarse a comprobación.",
+        );
+      }
+      setDraftMessage("Borrador guardado en tu cuenta.");
+    } catch (error) {
+      setSubmitError(getPersistenceError(error));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   function changeListingType(type: ListingType) {
+    if (draftId) return;
+
     setFormData((current) => ({
       ...current,
       type,
@@ -589,6 +1040,7 @@ export default function PublishWizard({
       documentNumber: type !== "evento" ? current.documentNumber : "",
       documentVerifier: type !== "evento" ? current.documentVerifier : "",
     }));
+    setDraftMessage("");
     setErrors({});
   }
 
@@ -599,6 +1051,7 @@ export default function PublishWizard({
       documentNumber: "",
       documentVerifier: "",
     }));
+    setDraftMessage("");
     setErrors((current) => ({
       ...current,
       documentType: undefined,
@@ -649,6 +1102,8 @@ export default function PublishWizard({
   }
 
   function chooseHelpType(type: ListingType, label: string) {
+    if (draftId) return;
+
     changeListingType(type);
     setHelpMessages((current) => [
       ...current,
@@ -659,12 +1114,6 @@ export default function PublishWizard({
         content: `Perfecto. ¿Cómo se llama ${type === "evento" ? "el evento" : type === "servicio" ? "el profesional o servicio" : "el comercio"}?`,
       },
     ]);
-  }
-
-  function handleSaveDraft() {
-    setDraftMessage(
-      "Borrador preparado. Al conectar el backend se guardará de forma segura en tu cuenta.",
-    );
   }
 
   function updateAdditionalContact(index: number, value: string) {
@@ -786,6 +1235,9 @@ export default function PublishWizard({
       if (formData.type === "servicio" && !formData.serviceArea.trim()) {
         nextErrors.serviceArea = "Indica el área donde prestas el servicio.";
       }
+      if (!isHttpsUrl(formData.website)) {
+        nextErrors.website = "El sitio web debe comenzar con https://.";
+      }
       if (!normalizeParaguayWhatsapp(formData.whatsapp)) {
         nextErrors.whatsapp =
           "Ingresa un número paraguayo válido. Ej.: 0981 123 456.";
@@ -793,15 +1245,24 @@ export default function PublishWizard({
       if (formData.email && !/^\S+@\S+\.\S+$/.test(formData.email)) {
         nextErrors.email = "Ingresa un correo válido.";
       }
-      if (formData.additionalContacts.some((contact) => !contact.trim())) {
+      if (
+        formData.additionalContacts.some(
+          (contact) => !normalizeAdditionalContact(contact),
+        )
+      ) {
         nextErrors.additionalContacts =
-          "Completa o elimina los contactos adicionales vacíos.";
+          "Completa o elimina los contactos adicionales inválidos.";
       }
       if (
         formData.socialLinks.some((link) => !link.network || !link.url.trim())
       ) {
         nextErrors.socialLinks =
           "Completa la red social y su enlace, o elimina la fila vacía.";
+      } else if (
+        formData.socialLinks.some((link) => !isHttpsUrl(link.url))
+      ) {
+        nextErrors.socialLinks =
+          "Los enlaces de redes sociales deben comenzar con https://.";
       }
     }
 
@@ -822,6 +1283,7 @@ export default function PublishWizard({
           nextErrors.businessHours =
             "Completa la hora de apertura y cierre de los días habilitados.";
         }
+
       }
 
       if (formData.type === "servicio") {
@@ -833,11 +1295,16 @@ export default function PublishWizard({
           nextErrors.serviceAtHome =
             "Selecciona al menos una modalidad de atención.";
         }
-        if (!formData.availabilityNotes.trim()) {
-          nextErrors.availabilityNotes = "Describe tu disponibilidad.";
+        const availabilityLength = formData.availabilityNotes.trim().length;
+        if (availabilityLength < 3 || availabilityLength > 300) {
+          nextErrors.availabilityNotes =
+            "La disponibilidad debe contener entre 3 y 300 caracteres.";
         }
         if (!formData.invoiceStatus) {
           nextErrors.invoiceStatus = "Indica si emites factura.";
+        }
+        if (parsePositivePyg(formData.priceFrom) === null) {
+          nextErrors.priceFrom = "Ingresa un precio válido en guaraníes.";
         }
       }
 
@@ -851,9 +1318,15 @@ export default function PublishWizard({
         if (
           formData.eventStart &&
           formData.eventEnd &&
-          new Date(formData.eventEnd) < new Date(formData.eventStart)
+          new Date(formData.eventEnd) <= new Date(formData.eventStart)
         ) {
           nextErrors.eventEnd = "La finalización debe ser posterior al inicio.";
+        }
+        if (formData.eventStart && !toIsoDateTime(formData.eventStart)) {
+          nextErrors.eventStart = "Ingresa una fecha de inicio válida.";
+        }
+        if (formData.eventEnd && !toIsoDateTime(formData.eventEnd)) {
+          nextErrors.eventEnd = "Ingresa una fecha de finalización válida.";
         }
         if (!formData.eventPricing) {
           nextErrors.eventPricing =
@@ -861,6 +1334,15 @@ export default function PublishWizard({
         }
         if (formData.eventPricing === "paid" && !formData.ticketPrice.trim()) {
           nextErrors.ticketPrice = "Indica el precio de la entrada.";
+        }
+        if (
+          formData.eventPricing === "paid" &&
+          parsePositivePyg(formData.ticketPrice) === null
+        ) {
+          nextErrors.ticketPrice = "Ingresa un precio válido en guaraníes.";
+        }
+        if (!isHttpsUrl(formData.ticketUrl)) {
+          nextErrors.ticketUrl = "El enlace debe comenzar con https://.";
         }
       }
     }
@@ -890,6 +1372,16 @@ export default function PublishWizard({
   }
 
   function handleImage(event: ChangeEvent<HTMLInputElement>) {
+    if (registeredImagePath) {
+      setErrors((current) => ({
+        ...current,
+        imageName:
+          "Esta publicación ya tiene una imagen principal registrada y no puede reemplazarse.",
+      }));
+      event.target.value = "";
+      return;
+    }
+
     const file = event.target.files?.[0];
     if (!file) return;
 
@@ -918,6 +1410,10 @@ export default function PublishWizard({
       return;
     }
 
+    setRegisteredImagePath(null);
+    setSelectedImage(file);
+    setImagePreview("");
+
     const reader = new FileReader();
 
     reader.onload = () => {
@@ -941,26 +1437,106 @@ export default function PublishWizard({
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    // Si todavía no estamos en la revisión, solo avanza de paso.
     if (step < 4) {
       goForward();
       return;
     }
 
-    // Publicar únicamente desde el paso 4.
-    for (const currentStep of [1, 2, 3]) {
-      if (!validateStep(currentStep)) {
-        setStep(currentStep);
-        window.scrollTo({ top: 0, behavior: "smooth" });
-        return;
-      }
-    }
+    setDraftMessage("");
+    if (isSubmitting || !validateAllSteps()) return;
 
-    setSubmitted(true);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    setIsSubmitting(true);
+    setSubmitError("");
+    setDraftMessage("");
+    setTaxVerificationWarning("");
+
+    void (async () => {
+      try {
+        const existingStatus = await ensureDraftWritable();
+        if (existingStatus === "published" || existingStatus === "pending") {
+          return;
+        }
+
+        const listingId = await persistDraft();
+
+        if (await submitTaxVerification(listingId)) {
+          setTaxVerificationWarning(
+            "La publicación continuará, pero el RUC no pudo enviarse a comprobación.",
+          );
+        }
+
+        let submitResult;
+        try {
+          submitResult = await supabase.rpc("submit_listing", {
+            target_listing_id: listingId,
+          });
+        } catch (error) {
+          if (!isCommunicationError(error)) throw error;
+
+          let reconciledListing;
+          try {
+            reconciledListing = await readDraftState(listingId);
+          } catch {
+            throw new Error("publication-uncertain");
+          }
+          if (
+            reconciledListing?.status === "published" ||
+            reconciledListing?.status === "pending"
+          ) {
+            setPublicationStatus(reconciledListing.status);
+            return;
+          }
+
+          throw new Error("publication-uncertain");
+        }
+
+        if (submitResult.error) {
+          if (isCommunicationError(submitResult.error)) {
+            let reconciledListing;
+            try {
+              reconciledListing = await readDraftState(listingId);
+            } catch {
+              throw new Error("publication-uncertain");
+            }
+            if (
+              reconciledListing?.status === "published" ||
+              reconciledListing?.status === "pending"
+            ) {
+              setPublicationStatus(reconciledListing.status);
+              return;
+            }
+
+            throw new Error("publication-uncertain");
+          }
+          throw submitResult.error;
+        }
+
+        const status = getRpcScalar(submitResult.data);
+        if (status !== "published" && status !== "pending") {
+          throw new Error("invalid-publication-status");
+        }
+
+        setPublicationStatus(status);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      } catch (error) {
+        setSubmitError(
+          error instanceof Error &&
+            [
+              "status-check-failed",
+              "not-editable",
+              "existing-primary-image",
+              "image-reconcile-failed",
+            ].includes(error.message)
+            ? getPersistenceError(error)
+            : getSubmissionError(error),
+        );
+      } finally {
+        setIsSubmitting(false);
+      }
+    })();
   }
 
-  if (submitted) {
+  if (publicationStatus) {
     return (
       <section className="mx-auto flex min-h-[640px] w-full max-w-3xl items-center px-5 py-14 sm:px-8">
         <div className="w-full rounded-3xl border border-border bg-surface p-7 text-center shadow-[0_22px_60px_rgba(11,31,51,0.08)] sm:p-10">
@@ -968,16 +1544,31 @@ export default function PublishWizard({
             <CheckCircle2 aria-hidden="true" className="h-8 w-8" />
           </div>
           <p className="mt-6 text-sm font-semibold text-primary">
-            Datos completados
+            Publicación enviada
           </p>
           <h1 className="mt-2 text-3xl font-bold tracking-[-0.035em] text-foreground">
-            Tu publicación está preparada
+            {publicationStatus === "published"
+              ? "Tu publicación ya está visible"
+              : "Tu publicación fue enviada a revisión"}
           </h1>
           <p className="mx-auto mt-4 max-w-xl text-sm leading-6 text-text-secondary sm:text-base">
-            “{formData.name}” quedó registrada. Al conectar el backend, Austro
-            decidirá si puede mostrarse directamente o si necesita una revisión
-            adicional.
+            “{formData.name}” quedó registrada correctamente en Austro.
           </p>
+
+          {taxVerificationWarning && (
+            <div
+              role="status"
+              className="mx-auto mt-7 flex max-w-md items-start gap-3 rounded-2xl bg-amber-50 p-4 text-left"
+            >
+              <Info
+                aria-hidden="true"
+                className="mt-0.5 h-5 w-5 shrink-0 text-amber-700"
+              />
+              <p className="text-sm leading-6 text-amber-900">
+                {taxVerificationWarning}
+              </p>
+            </div>
+          )}
 
           <div className="mx-auto mt-7 flex max-w-md items-start gap-3 rounded-2xl bg-surface-soft p-4 text-left">
             <ShieldCheck
@@ -1002,8 +1593,13 @@ export default function PublishWizard({
               onClick={() => {
                 setFormData(initialFormData);
                 setStep(1);
-                setSubmitted(false);
                 setSelectedImage(null);
+                setDraftId(null);
+                setRegisteredImagePath(null);
+                setImageAttemptPath(null);
+                setPublicationStatus(null);
+                setSubmitError("");
+                setTaxVerificationWarning("");
                 setImagePreview("");
                 setLocationMessage("");
                 setImagePreview("");
@@ -1098,6 +1694,11 @@ export default function PublishWizard({
                 <p className="mt-2 text-sm leading-6 text-text-secondary">
                   Elige el tipo para adaptar los campos de la publicación.
                 </p>
+                {draftId && (
+                  <p className="mt-2 text-xs font-medium text-text-secondary">
+                    El tipo no se puede cambiar después del primer guardado.
+                  </p>
+                )}
 
                 <div className="mt-6 grid gap-3 md:grid-cols-3">
                   {publicationTypes.map((option) => {
@@ -1109,8 +1710,9 @@ export default function PublishWizard({
                         key={option.value}
                         type="button"
                         aria-pressed={isSelected}
+                        disabled={Boolean(draftId)}
                         onClick={() => changeListingType(option.value)}
-                        className={`rounded-2xl border p-4 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+                        className={`rounded-2xl border p-4 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-60 ${
                           isSelected
                             ? option.visual.selectedCard
                             : "border-border hover:border-primary/25 hover:bg-surface-soft"
@@ -1391,7 +1993,11 @@ export default function PublishWizard({
                   </label>
                   <label
                     htmlFor="publication-image"
-                    className="mt-2 flex cursor-pointer items-center gap-4 rounded-2xl border border-dashed border-border p-4 transition-colors hover:border-primary/40 hover:bg-surface-soft"
+                    className={`mt-2 flex items-center gap-4 rounded-2xl border border-dashed border-border p-4 transition-colors ${
+                      registeredImagePath || isSubmitting
+                        ? "cursor-not-allowed opacity-60"
+                        : "cursor-pointer hover:border-primary/40 hover:bg-surface-soft"
+                    }`}
                   >
                     <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-surface-soft text-primary">
                       <ImagePlus className="h-5 w-5" />
@@ -1410,6 +2016,7 @@ export default function PublishWizard({
                     type="file"
                     accept="image/jpeg,image/png,image/webp"
                     onChange={handleImage}
+                    disabled={Boolean(registeredImagePath) || isSubmitting}
                     className="sr-only"
                   />
                   <FieldError message={errors.imageName} />
@@ -1744,6 +2351,7 @@ export default function PublishWizard({
                         placeholder="https://ejemplo.com"
                         className={inputClass}
                       />
+                      <FieldError message={errors.website} />
                     </div>
                   </div>
 
@@ -2078,6 +2686,7 @@ export default function PublishWizard({
                             Indica un valor orientativo; el presupuesto final
                             puede variar.
                           </p>
+                          <FieldError message={errors.priceFrom} />
                         </div>
                       </div>
                     </section>
@@ -2237,6 +2846,7 @@ export default function PublishWizard({
                               placeholder="https://"
                               className={inputClass}
                             />
+                            <FieldError message={errors.ticketUrl} />
                           </div>
                         </div>
                       )}
@@ -2694,10 +3304,33 @@ export default function PublishWizard({
               </div>
             )}
 
+            {submitError && (
+              <div
+                role="alert"
+                className="mt-6 flex items-start gap-3 rounded-xl border border-red-100 bg-red-50 p-4"
+              >
+                <Info className="mt-0.5 h-4 w-4 shrink-0 text-red-700" />
+                <p className="text-xs leading-5 text-red-800">{submitError}</p>
+              </div>
+            )}
+
+            {taxVerificationWarning && (
+              <div
+                role="status"
+                className="mt-6 flex items-start gap-3 rounded-xl border border-amber-100 bg-amber-50 p-4"
+              >
+                <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+                <p className="text-xs leading-5 text-amber-900">
+                  {taxVerificationWarning}
+                </p>
+              </div>
+            )}
+
             <div className="mt-8 flex flex-col-reverse gap-3 border-t border-border/70 pt-6 sm:flex-row sm:items-center sm:justify-between">
               {step > 1 ? (
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={() => {
                     if (step === 4) {
                       setStep(1);
@@ -2721,14 +3354,17 @@ export default function PublishWizard({
               )}
 
               <div className="flex flex-col gap-3 sm:flex-row">
-                <button
-                  type="button"
-                  onClick={handleSaveDraft}
-                  className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-border px-5 text-sm font-semibold text-foreground transition-colors hover:border-primary/30 hover:bg-surface-soft hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                >
-                  <Save className="h-4 w-4" />
-                  Guardar borrador
-                </button>
+                {step === 4 && (
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveDraft()}
+                    disabled={isSubmitting}
+                    className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-border px-5 text-sm font-semibold text-foreground transition-colors hover:border-primary/30 hover:bg-surface-soft hover:text-primary disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                  >
+                    <Save className="h-4 w-4" />
+                    Guardar borrador
+                  </button>
+                )}
 
                 {step < 4 ? (
                   <button
@@ -2747,9 +3383,10 @@ export default function PublishWizard({
                   <button
                     key="publish-button"
                     type="submit"
-                    className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-primary px-6 text-sm font-semibold text-white transition-colors hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+                    disabled={isSubmitting}
+                    className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-primary px-6 text-sm font-semibold text-white transition-colors hover:bg-primary-hover disabled:cursor-wait disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
                   >
-                    Publicar
+                    {isSubmitting ? "Publicando..." : "Publicar"}
                     <Check className="h-4 w-4" />
                   </button>
                 )}
@@ -2909,8 +3546,9 @@ export default function PublishWizard({
                     <button
                       key={option.value}
                       type="button"
+                      disabled={Boolean(draftId)}
                       onClick={() => chooseHelpType(option.value, option.label)}
-                      className="rounded-xl border border-border bg-surface px-4 py-2 text-xs font-semibold text-foreground transition-colors hover:border-primary/30 hover:text-primary"
+                      className="rounded-xl border border-border bg-surface px-4 py-2 text-xs font-semibold text-foreground transition-colors hover:border-primary/30 hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {option.label}
                     </button>
