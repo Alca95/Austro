@@ -2,6 +2,10 @@ import { Suspense } from "react";
 import ExploreDirectory from "../../components/ExploreDirectory";
 import PublicFooter from "../../components/PublicFooter";
 import PublicHeader from "../../components/PublicHeader";
+import {
+  getPublicDirectory,
+  type PublicDirectoryParams,
+} from "../../lib/listings/public-directory";
 
 function DirectoryFallback() {
   return (
@@ -20,13 +24,46 @@ function DirectoryFallback() {
   );
 }
 
-export default function ExplorePage() {
+type ExplorePageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+function firstSearchParam(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+export default async function ExplorePage({
+  searchParams,
+}: ExplorePageProps) {
+  const resolvedSearchParams = await searchParams;
+  const directoryParams: PublicDirectoryParams = {
+    query: firstSearchParam(resolvedSearchParams.query),
+    type: firstSearchParam(resolvedSearchParams.type),
+    category: firstSearchParam(resolvedSearchParams.category),
+    page: firstSearchParam(resolvedSearchParams.page),
+  };
+
+  let directory;
+  let directoryError = "";
+
+  try {
+    directory = await getPublicDirectory(directoryParams);
+  } catch {
+    directoryError =
+      "No pudimos cargar el directorio. Intenta nuevamente.";
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <PublicHeader activePage="explorar" />
       <main>
         <Suspense fallback={<DirectoryFallback />}>
-          <ExploreDirectory />
+          <ExploreDirectory
+            key={JSON.stringify(directoryParams)}
+            directory={directory}
+            directoryError={directoryError}
+            initialQuery={directoryParams.query ?? ""}
+          />
         </Suspense>
       </main>
       <PublicFooter />
