@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const LOGIN_PATH = "/iniciar-sesion";
 const PUBLISH_PATH = "/publicar";
+const MY_LISTINGS_PATH = "/mis-publicaciones";
 const PROFILE_PATH = "/completar-perfil";
 const ADMIN_PATH = "/admin";
 const MFA_SETUP_PATH = "/configurar-mfa";
@@ -80,6 +81,10 @@ export async function updateSession(request: NextRequest) {
     pathname,
     PUBLISH_PATH,
   );
+  const isMyListingsRoute = matchesPath(
+    pathname,
+    MY_LISTINGS_PATH,
+  );
   const isProfileRoute = matchesPath(
     pathname,
     PROFILE_PATH,
@@ -104,6 +109,7 @@ export async function updateSession(request: NextRequest) {
 
   const requiresAuthentication =
     isPublishRoute ||
+    isMyListingsRoute ||
     isProfileRoute ||
     isInternalRoute;
 

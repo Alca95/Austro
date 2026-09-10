@@ -1,10 +1,12 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ChevronDown,
   CircleAlert,
+  FileText,
   LoaderCircle,
   LogOut,
   UserRound,
@@ -140,6 +142,19 @@ export default function UserAccountMenu({ user }: UserAccountMenuProps) {
           </div>
 
           <div className="border-t border-border/70 pt-2">
+            <Link
+              href="/mis-publicaciones"
+              role="menuitem"
+              onClick={() => setIsOpen(false)}
+              className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-sm font-semibold text-foreground transition-colors hover:bg-surface-soft hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            >
+              <FileText
+                aria-hidden="true"
+                className="h-[18px] w-[18px]"
+                strokeWidth={2}
+              />
+              Mis publicaciones
+            </Link>
             <button
               type="button"
               role="menuitem"
