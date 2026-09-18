@@ -1,58 +1,31 @@
 import Link from "next/link";
 import {
   ArrowRight,
-  BadgeCheck,
   BriefcaseBusiness,
   CalendarDays,
   ChevronDown,
-  Clock3,
-  Map,
-  MapPin,
+  Grid2X2,
   Search,
-  Star,
   Store,
-  Utensils,
 } from "lucide-react";
+import HomeListings from "../components/HomeListings";
 import PublicFooter from "../components/PublicFooter";
 import PublicHeader from "../components/PublicHeader";
+import { getPublicDirectory } from "../lib/listings/public-directory";
 
-const featuredListings = [
-  {
-    name: "Sabores de Oviedo",
-    type: "Comercio",
-    category: "Gastronomía",
-    icon: Utensils,
-    accent: "from-blue-50 via-sky-100 to-blue-200",
-    rating: "4.8",
-    status: "Abierto ahora",
-    location: "1,2 km",
-    verified: true,
-  },
-  {
-    name: "Soluciones del Hogar",
-    type: "Servicio",
-    category: "Electricidad y reparaciones",
-    icon: BriefcaseBusiness,
-    accent: "from-indigo-50 via-violet-100 to-indigo-200",
-    rating: "4.9",
-    status: "Disponible hoy",
-    location: "2,4 km",
-    verified: true,
-  },
-  {
-    name: "Feria Local de Emprendedores",
-    type: "Evento",
-    category: "Cultura y comunidad",
-    icon: CalendarDays,
-    accent: "from-cyan-50 via-sky-100 to-cyan-200",
-    status: "17:00",
-    location: "Centro",
-    eventDate: "SÁB 08",
-    verified: false,
-  },
-];
+export default async function Home() {
+  let directory;
+  let directoryUnavailable = false;
 
-export default function Home() {
+  try {
+    directory = await getPublicDirectory({ page: "1" });
+  } catch {
+    directoryUnavailable = true;
+  }
+
+  const recentListings = directory?.listings.slice(0, 3) ?? [];
+  const categories = directory?.categories ?? [];
+
   return (
     <div className="min-h-screen bg-background">
       <PublicHeader />
@@ -105,12 +78,11 @@ export default function Home() {
                   className="h-12 w-full cursor-pointer appearance-none bg-transparent pl-4 pr-10 text-sm font-semibold text-foreground outline-none focus:text-primary"
                 >
                   <option value="">Todas las categorías</option>
-                  <option value="gastronomia">Gastronomía</option>
-                  <option value="salud">Salud</option>
-                  <option value="belleza">Belleza</option>
-                  <option value="hogar">Hogar</option>
-                  <option value="educacion">Educación</option>
-                  <option value="entretenimiento">Entretenimiento</option>
+                  {categories.map((category) => (
+                    <option key={category.id} value={category.slug}>
+                      {category.name}
+                    </option>
+                  ))}
                 </select>
                 <ChevronDown
                   aria-hidden="true"
@@ -145,9 +117,9 @@ export default function Home() {
                   href: "/explorar?type=evento",
                 },
                 {
-                  label: "Ver mapa",
-                  icon: Map,
-                  href: "/explorar?vista=mapa",
+                  label: "Ver todo",
+                  icon: Grid2X2,
+                  href: "/explorar",
                 },
               ].map(({ label, icon: Icon, href }) => (
                 <Link
@@ -177,7 +149,7 @@ export default function Home() {
                   Descubre tu ciudad
                 </p>
                 <h2 className="mt-2 text-2xl font-bold tracking-[-0.03em] text-foreground sm:text-3xl">
-                  Cerca de ti
+                  Publicaciones recientes
                 </h2>
                 <p className="mt-3 max-w-xl text-sm leading-6 text-text-secondary sm:text-base">
                   Lugares, profesionales y actividades que puedes encontrar en
@@ -198,83 +170,10 @@ export default function Home() {
               </Link>
             </div>
 
-            <div className="mt-9 grid gap-5 md:grid-cols-2 lg:grid-cols-3">
-              {featuredListings.map((listing, index) => {
-                const Icon = listing.icon;
-
-                return (
-                  <article
-                    key={listing.name}
-                    className={`group overflow-hidden rounded-3xl border border-border/80 bg-surface transition-all duration-300 hover:-translate-y-1 hover:border-primary/30 hover:shadow-[0_18px_45px_rgba(11,31,51,0.09)] ${
-                      index === 2 ? "md:col-span-2 lg:col-span-1" : ""
-                    }`}
-                  >
-                    <div
-                      className={`relative flex h-44 items-center justify-center overflow-hidden bg-gradient-to-br ${listing.accent}`}
-                    >
-                      <span className="absolute left-4 top-4 rounded-full bg-white/90 px-3 py-1.5 text-xs font-semibold text-primary shadow-sm backdrop-blur">
-                        {listing.type}
-                      </span>
-                      {listing.eventDate && (
-                        <span className="absolute right-4 top-4 rounded-lg bg-white/90 px-2.5 py-1 text-xs font-bold text-primary shadow-sm">
-                          {listing.eventDate}
-                        </span>
-                      )}
-                      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white text-primary shadow-lg shadow-blue-900/10 transition-transform duration-300 group-hover:scale-105">
-                        <Icon
-                          aria-hidden="true"
-                          className="h-7 w-7"
-                          strokeWidth={1.8}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="p-5">
-                      <div className="flex items-start justify-between gap-4">
-                        <div>
-                          <div className="flex items-center gap-1.5">
-                            <h3 className="font-bold text-foreground">
-                              {listing.name}
-                            </h3>
-                            {listing.verified && (
-                              <BadgeCheck
-                                aria-label="Información verificada"
-                                className="h-[18px] w-[18px] shrink-0 text-primary"
-                                strokeWidth={2}
-                              />
-                            )}
-                          </div>
-                          <p className="mt-1 text-sm text-text-secondary">
-                            {listing.category}
-                          </p>
-                        </div>
-
-                        {listing.rating && (
-                          <div className="flex shrink-0 items-center gap-1 text-sm font-semibold text-foreground">
-                            <Star
-                              aria-hidden="true"
-                              className="h-4 w-4 fill-amber-400 text-amber-400"
-                            />
-                            {listing.rating}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="mt-5 flex items-center justify-between border-t border-border/60 pt-4 text-sm">
-                        <span className="flex items-center gap-1.5 font-medium text-success">
-                          <Clock3 aria-hidden="true" className="h-4 w-4" />
-                          {listing.status}
-                        </span>
-                        <span className="flex items-center gap-1.5 text-text-secondary">
-                          <MapPin aria-hidden="true" className="h-4 w-4" />
-                          {listing.location}
-                        </span>
-                      </div>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
+            <HomeListings
+              listings={recentListings}
+              unavailable={directoryUnavailable}
+            />
           </div>
         </section>
 

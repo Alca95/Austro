@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState, useTransition } from "react";
+import { FormEvent, useRef, useState, useTransition } from "react";
 import {
   BriefcaseBusiness,
   CalendarDays,
@@ -12,9 +12,9 @@ import {
   Search,
   SlidersHorizontal,
   Store,
-  X,
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
+import ListingDetailDialog from "./ListingDetailDialog";
 import type {
   PublicDirectoryCategory,
   PublicDirectoryData,
@@ -76,7 +76,10 @@ function ListingCard({
   onImageError,
 }: {
   listing: PublicDirectoryListing;
-  onSelect: (listing: PublicDirectoryListing) => void;
+  onSelect: (
+    listing: PublicDirectoryListing,
+    trigger: HTMLButtonElement,
+  ) => void;
   failedImage: boolean;
   onImageError: (listingId: string) => void;
 }) {
@@ -130,7 +133,7 @@ function ListingCard({
 
         <button
           type="button"
-          onClick={() => onSelect(listing)}
+          onClick={(event) => onSelect(listing, event.currentTarget)}
           className="mt-5 inline-flex min-h-11 w-full items-center justify-center rounded-xl border border-border text-sm font-semibold text-foreground transition-colors hover:border-primary/40 hover:bg-surface-soft hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         >
           Ver información
@@ -178,6 +181,7 @@ export default function ExploreDirectory({
   const [draftQuery, setDraftQuery] = useState(initialQuery);
   const [selectedListing, setSelectedListing] =
     useState<PublicDirectoryListing | null>(null);
+  const selectedTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
 
   const appliedQuery = searchParams.get("query") ?? "";
@@ -356,7 +360,10 @@ export default function ExploreDirectory({
                         <ListingCard
                           key={listing.id}
                           listing={listing}
-                          onSelect={setSelectedListing}
+                          onSelect={(nextListing, trigger) => {
+                            selectedTriggerRef.current = trigger;
+                            setSelectedListing(nextListing);
+                          }}
                           failedImage={failedImages.has(listing.id)}
                           onImageError={(listingId) => setFailedImages((current) => new Set(current).add(listingId))}
                         />
@@ -378,23 +385,12 @@ export default function ExploreDirectory({
       </section>
 
       {selectedListing && (
-        <div role="dialog" aria-modal="true" aria-labelledby="listing-dialog-title" className="fixed inset-0 z-[70] flex items-end justify-center bg-slate-950/45 p-0 backdrop-blur-sm sm:items-center sm:p-5" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedListing(null); }}>
-          <div className="w-full max-w-lg rounded-t-3xl bg-surface p-6 shadow-2xl sm:rounded-3xl sm:p-7">
-            <div className="flex items-start justify-between gap-5">
-              <div>
-                <p className="text-sm font-semibold text-primary">{listingTypeLabels[selectedListing.type]}</p>
-                <h2 id="listing-dialog-title" className="mt-1 text-2xl font-bold tracking-[-0.03em] text-foreground">{selectedListing.name}</h2>
-              </div>
-              <button type="button" aria-label="Cerrar información" onClick={() => setSelectedListing(null)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border text-text-secondary transition-colors hover:bg-surface-soft hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><X aria-hidden="true" className="h-5 w-5" /></button>
-            </div>
-            <p className="mt-5 text-sm leading-6 text-text-secondary">{selectedListing.description}</p>
-            <dl className="mt-6 grid grid-cols-2 gap-4 rounded-2xl bg-surface-soft p-4">
-              <div><dt className="text-xs font-semibold text-text-secondary">Categoría</dt><dd className="mt-1 text-sm font-bold text-foreground">{selectedListing.categoryName}</dd></div>
-              <div><dt className="text-xs font-semibold text-text-secondary">Barrio</dt><dd className="mt-1 text-sm font-bold text-foreground">{selectedListing.neighborhood}</dd></div>
-              {formatEventDate(selectedListing.eventStart) && <div className="col-span-2"><dt className="text-xs font-semibold text-text-secondary">Fecha del evento</dt><dd className="mt-1 text-sm font-bold text-foreground">{formatEventDate(selectedListing.eventStart)}</dd></div>}
-            </dl>
-          </div>
-        </div>
+        <ListingDetailDialog
+          key={selectedListing.id}
+          listing={selectedListing}
+          returnFocusRef={selectedTriggerRef}
+          onClose={() => setSelectedListing(null)}
+        />
       )}
     </>
   );
